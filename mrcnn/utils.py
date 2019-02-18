@@ -842,19 +842,6 @@ def batch_slice(inputs, graph_fn, batch_size, names=None):
     return result
 
 
-def download_trained_weights(coco_model_path, verbose=1):
-    """Download COCO trained weights from Releases.
-
-    coco_model_path: local path of COCO trained weights
-    """
-    if verbose > 0:
-        print("Downloading pretrained model to " + coco_model_path + " ...")
-    with urllib.request.urlopen(COCO_MODEL_URL) as resp, open(coco_model_path, 'wb') as out:
-        shutil.copyfileobj(resp, out)
-    if verbose > 0:
-        print("... done downloading pretrained model!")
-
-
 def norm_boxes(boxes, shape):
     """Converts boxes from pixel coordinates to normalized coordinates.
     boxes: [N, (y1, x1, y2, x2)] in pixel coordinates

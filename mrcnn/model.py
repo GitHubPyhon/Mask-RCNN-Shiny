@@ -13,7 +13,6 @@ import datetime
 import re
 import math
 import logging
-from collections import OrderedDict
 import multiprocessing
 import numpy as np
 import skimage.transform
@@ -1803,7 +1802,7 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 #  MaskRCNN Class
 ############################################################
 
-class MaskRCNN():
+class MaskRCNN:
     """Encapsulates the Mask RCNN model functionality.
 
     The actual Keras model is in the keras_model property.
@@ -2614,57 +2613,6 @@ class MaskRCNN():
             if l.get_weights():
                 layers.append(l)
         return layers
-
-    def run_graph(self, images, outputs, image_metas=None):
-        """Runs a sub-set of the computation graph that computes the given
-        outputs.
-
-        image_metas: If provided, the images are assumed to be already
-            molded (i.e. resized, padded, and noramlized)
-
-        outputs: List of tuples (name, tensor) to compute. The tensors are
-            symbolic TensorFlow tensors and the names are for easy tracking.
-
-        Returns an ordered dict of results. Keys are the names received in the
-        input and values are Numpy arrays.
-        """
-        model = self.keras_model
-
-        # Organize desired outputs into an ordered dict
-        outputs = OrderedDict(outputs)
-        for o in outputs.values():
-            assert o is not None
-
-        # Build a Keras function to run parts of the computation graph
-        inputs = model.inputs
-        if model.uses_learning_phase and not isinstance(K.learning_phase(), int):
-            inputs += [K.learning_phase()]
-        kf = K.function(model.inputs, list(outputs.values()))
-
-        # Prepare inputs
-        if image_metas is None:
-            molded_images, image_metas, _ = self.mold_inputs(images)
-        else:
-            molded_images = images
-        image_shape = molded_images[0].shape
-        # Anchors
-        anchors = self.get_anchors(image_shape)
-        # Duplicate across the batch dimension because Keras requires it
-        # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
-        model_in = [molded_images, image_metas, anchors]
-
-        # Run inference
-        if model.uses_learning_phase and not isinstance(K.learning_phase(), int):
-            model_in.append(0.)
-        outputs_np = kf(model_in)
-
-        # Pack the generated Numpy arrays into a a dict and log the results.
-        outputs_np = OrderedDict([(k, v)
-                                  for k, v in zip(outputs.keys(), outputs_np)])
-        for k, v in outputs_np.items():
-            log(k, v)
-        return outputs_np
 
 
 ############################################################

@@ -4,8 +4,8 @@ import os
 import cv2
 import numpy as np
 
-from samples import coco
-from mrcnn import model as modellib
+from mrcnn.config import Config
+from mrcnn.model import MaskRCNN
 
 
 # Input the original image name
@@ -18,28 +18,35 @@ image = cv2.imread(original_image)
 # Use cvtColor to accomplish image transformation from RGB image to gray image
 gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-# Load the pre-trained model data
-ROOT_DIR = os.getcwd()
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(ROOT_DIR, "logs")
 COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 
 
-# Change the config infermation
-class InferenceConfig(coco.CocoConfig):
-    GPU_COUNT = 1
-    
-    # Number of images to train with on each GPU. A 12GB GPU can typically
-    # handle 2 images of 1024x1024px.
-    # Adjust based on your GPU memory and image sizes. Use the highest
-    # number that your GPU can handle for best performance.
+class CocoConfig(Config):
+    """Configuration for training on MS COCO.
+    Derives from the base Config class and overrides values specific
+    to the COCO dataset.
+    """
+    # Give the configuration a recognizable name
+    NAME = "coco"
+
+    # We use a GPU with 12GB memory, which can fit two images.
+    # Adjust down if you use a smaller GPU.
     IMAGES_PER_GPU = 1
 
+    # Uncomment to train on 8 GPUs (default is 1)
+    # GPU_COUNT = 8
 
-config = InferenceConfig()
+    # Number of classes (including background)
+    NUM_CLASSES = 1 + 80  # COCO has 80 classes
+
+
+config = CocoConfig()
 
 
 # COCO data set object names
-model = modellib.MaskRCNN(
+model = MaskRCNN(
     mode="inference", model_dir=MODEL_DIR, config=config
 )
 model.load_weights(COCO_MODEL_PATH, by_name=True)
@@ -89,18 +96,13 @@ def apply_mask(image, mask):
     return image
 
 
-# This function is used to show the object detection result in original image.
-def display_instances(image, boxes, masks, ids, names, scores):
-    # max_area will save the largest object for all the detection results
-    max_area = 0
-    
+def display_instances(image, boxes, masks, ids, names, obj='person', count=1):
+
     # n_instances saves the amount of all objects
     n_instances = boxes.shape[0]
 
-    if not n_instances:
-        print('NO INSTANCES TO DISPLAY')
-    else:
-        assert boxes.shape[0] == masks.shape[-1] == ids.shape[0]
+    objects = []
+    final_mask = None
 
     for i in range(n_instances):
         if not np.any(boxes[i]):
@@ -111,26 +113,23 @@ def display_instances(image, boxes, masks, ids, names, scores):
         square = (y2 - y1) * (x2 - x1)
 
         label = names[ids[i]]
-        if label == 'person':
-            # save the largest object in the image as main character
-            # other people will be regarded as background
-            if square > max_area:
-                max_area = square
-                mask = masks[:, :, i]
-            else:
-                continue
-        else:
-            continue
 
-    image = apply_mask(image, mask)
-        
-    return image
+        objects.append([label, square])
+
+        if final_mask is not None:
+            final_mask |= masks[:, :, i]
+        else:
+            final_mask = masks[:, :, i]
+
+    apply_mask(image, final_mask)
+
+    return True
 
 
 results = model.detect([image], verbose=0)
 r = results[0]
-frame = display_instances(
-    image, r['rois'], r['masks'], r['class_ids'], class_names, r['scores']
+display_instances(
+    image, r['rois'], r['masks'], r['class_ids'], class_names
 )
 
 cv2.imwrite('save_image.jpg', image)

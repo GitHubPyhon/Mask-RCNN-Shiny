@@ -7,19 +7,16 @@ Licensed under the MIT License (see LICENSE for details)
 Written by Waleed Abdulla
 """
 
-import sys
-import os
-import math
+import scipy
+import shutil
 import random
+import warnings
+import skimage.io
+import skimage.color
+import urllib.request
+import skimage.transform
 import numpy as np
 import tensorflow as tf
-import scipy
-import skimage.color
-import skimage.io
-import skimage.transform
-import urllib.request
-import shutil
-import warnings
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/matterport/Mask_RCNN/releases/download/v2.0/mask_rcnn_coco.h5"
@@ -74,25 +71,6 @@ def compute_iou(box, boxes, box_area, boxes_area):
     union = box_area + boxes_area[:] - intersection[:]
     iou = intersection / union
     return iou
-
-
-def compute_overlaps(boxes1, boxes2):
-    """Computes IoU overlaps between two sets of boxes.
-    boxes1, boxes2: [N, (y1, x1, y2, x2)].
-
-    For better performance, pass the largest set first and the smaller second.
-    """
-    # Areas of anchors and GT boxes
-    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
-    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
-
-    # Compute overlaps to generate matrix [boxes1 count, boxes2 count]
-    # Each cell contains the IoU value.
-    overlaps = np.zeros((boxes1.shape[0], boxes2.shape[0]))
-    for i in range(overlaps.shape[1]):
-        box2 = boxes2[i]
-        overlaps[:, i] = compute_iou(box2, boxes1, area2[i], area1)
-    return overlaps
 
 
 def compute_overlaps_masks(masks1, masks2):
@@ -150,85 +128,18 @@ def non_max_suppression(boxes, scores, threshold):
     return np.array(pick, dtype=np.int32)
 
 
-def apply_box_deltas(boxes, deltas):
-    """Applies the given deltas to the given boxes.
-    boxes: [N, (y1, x1, y2, x2)]. Note that (y2, x2) is outside the box.
-    deltas: [N, (dy, dx, log(dh), log(dw))]
+def download_trained_weights(coco_model_path):
+    """Download COCO trained weights from Releases.
+    coco_model_path: local path of COCO trained weights
     """
-    boxes = boxes.astype(np.float32)
-    # Convert to y, x, h, w
-    height = boxes[:, 2] - boxes[:, 0]
-    width = boxes[:, 3] - boxes[:, 1]
-    center_y = boxes[:, 0] + 0.5 * height
-    center_x = boxes[:, 1] + 0.5 * width
-    # Apply deltas
-    center_y += deltas[:, 0] * height
-    center_x += deltas[:, 1] * width
-    height *= np.exp(deltas[:, 2])
-    width *= np.exp(deltas[:, 3])
-    # Convert back to y1, x1, y2, x2
-    y1 = center_y - 0.5 * height
-    x1 = center_x - 0.5 * width
-    y2 = y1 + height
-    x2 = x1 + width
-    return np.stack([y1, x1, y2, x2], axis=1)
-
-
-def box_refinement_graph(box, gt_box):
-    """Compute refinement needed to transform box to gt_box.
-    box and gt_box are [N, (y1, x1, y2, x2)]
-    """
-    box = tf.cast(box, tf.float32)
-    gt_box = tf.cast(gt_box, tf.float32)
-
-    height = box[:, 2] - box[:, 0]
-    width = box[:, 3] - box[:, 1]
-    center_y = box[:, 0] + 0.5 * height
-    center_x = box[:, 1] + 0.5 * width
-
-    gt_height = gt_box[:, 2] - gt_box[:, 0]
-    gt_width = gt_box[:, 3] - gt_box[:, 1]
-    gt_center_y = gt_box[:, 0] + 0.5 * gt_height
-    gt_center_x = gt_box[:, 1] + 0.5 * gt_width
-
-    dy = (gt_center_y - center_y) / height
-    dx = (gt_center_x - center_x) / width
-    dh = tf.log(gt_height / height)
-    dw = tf.log(gt_width / width)
-
-    result = tf.stack([dy, dx, dh, dw], axis=1)
-    return result
-
-
-def box_refinement(box, gt_box):
-    """Compute refinement needed to transform box to gt_box.
-    box and gt_box are [N, (y1, x1, y2, x2)]. (y2, x2) is
-    assumed to be outside the box.
-    """
-    box = box.astype(np.float32)
-    gt_box = gt_box.astype(np.float32)
-
-    height = box[:, 2] - box[:, 0]
-    width = box[:, 3] - box[:, 1]
-    center_y = box[:, 0] + 0.5 * height
-    center_x = box[:, 1] + 0.5 * width
-
-    gt_height = gt_box[:, 2] - gt_box[:, 0]
-    gt_width = gt_box[:, 3] - gt_box[:, 1]
-    gt_center_y = gt_box[:, 0] + 0.5 * gt_height
-    gt_center_x = gt_box[:, 1] + 0.5 * gt_width
-
-    dy = (gt_center_y - center_y) / height
-    dx = (gt_center_x - center_x) / width
-    dh = np.log(gt_height / height)
-    dw = np.log(gt_width / width)
-
-    return np.stack([dy, dx, dh, dw], axis=1)
-
+    with urllib.request.urlopen(COCO_MODEL_URL) as resp:
+        with open(coco_model_path, 'wb') as out:
+            shutil.copyfileobj(resp, out)
 
 ############################################################
 #  Dataset
 ############################################################
+
 
 class Dataset(object):
     """The base class for dataset classes.
@@ -539,29 +450,6 @@ def minimize_mask(bbox, mask, mini_shape):
     return mini_mask
 
 
-def expand_mask(bbox, mini_mask, image_shape):
-    """Resizes mini masks back to image size. Reverses the change
-    of minimize_mask().
-
-    See inspect_data.ipynb notebook for more details.
-    """
-    mask = np.zeros(image_shape[:2] + (mini_mask.shape[-1],), dtype=bool)
-    for i in range(mask.shape[-1]):
-        m = mini_mask[:, :, i]
-        y1, x1, y2, x2 = bbox[i][:4]
-        h = y2 - y1
-        w = x2 - x1
-        # Resize with bilinear interpolation
-        m = skimage.transform.resize(m, (h, w), order=1, mode="constant")
-        mask[y1:y2, x1:x2, i] = np.around(m).astype(np.bool)
-    return mask
-
-
-# TODO: Build and use this function to reduce code duplication
-def mold_mask(mask, config):
-    pass
-
-
 def unmold_mask(mask, bbox, image_shape):
     """Converts a mask generated by the neural network to a format similar
     to its original shape.
@@ -754,48 +642,6 @@ def compute_ap(gt_boxes, gt_class_ids, gt_masks,
                  precisions[indices])
 
     return mAP, precisions, recalls, overlaps
-
-
-def compute_ap_range(gt_box, gt_class_id, gt_mask,
-                     pred_box, pred_class_id, pred_score, pred_mask,
-                     iou_thresholds=None, verbose=1):
-    """Compute AP over a range or IoU thresholds. Default range is 0.5-0.95."""
-    # Default is 0.5 to 0.95 with increments of 0.05
-    iou_thresholds = iou_thresholds or np.arange(0.5, 1.0, 0.05)
-    
-    # Compute AP over range of IoU thresholds
-    AP = []
-    for iou_threshold in iou_thresholds:
-        ap, precisions, recalls, overlaps =\
-            compute_ap(gt_box, gt_class_id, gt_mask,
-                        pred_box, pred_class_id, pred_score, pred_mask,
-                        iou_threshold=iou_threshold)
-        if verbose:
-            print("AP @{:.2f}:\t {:.3f}".format(iou_threshold, ap))
-        AP.append(ap)
-    AP = np.array(AP).mean()
-    if verbose:
-        print("AP @{:.2f}-{:.2f}:\t {:.3f}".format(
-            iou_thresholds[0], iou_thresholds[-1], AP))
-    return AP
-
-
-def compute_recall(pred_boxes, gt_boxes, iou):
-    """Compute the recall at the given IoU threshold. It's an indication
-    of how many GT boxes were found by the given prediction boxes.
-
-    pred_boxes: [N, (y1, x1, y2, x2)] in image coordinates
-    gt_boxes: [N, (y1, x1, y2, x2)] in image coordinates
-    """
-    # Measure overlaps
-    overlaps = compute_overlaps(pred_boxes, gt_boxes)
-    iou_max = np.max(overlaps, axis=1)
-    iou_argmax = np.argmax(overlaps, axis=1)
-    positive_ids = np.where(iou_max >= iou)[0]
-    matched_gt_boxes = iou_argmax[positive_ids]
-
-    recall = len(set(matched_gt_boxes)) / gt_boxes.shape[0]
-    return recall, positive_ids
 
 
 # ## Batch Slicing

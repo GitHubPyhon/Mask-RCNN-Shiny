@@ -9,8 +9,6 @@ Written by Waleed Abdulla
 
 import math
 import keras
-import random
-import logging
 import numpy as np
 import tensorflow as tf
 import keras.layers as KL

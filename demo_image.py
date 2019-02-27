@@ -18,7 +18,6 @@ if not os.path.isfile(COCO_MODEL_PATH):
     download_trained_weights(COCO_MODEL_PATH)
 
 
-# COCO data set object names
 model = MaskRCNN(mode="inference", config=coco_config)
 
 model.load_weights(COCO_MODEL_PATH, by_name=True)

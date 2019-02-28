@@ -9,6 +9,7 @@ Written by Waleed Abdulla
 
 import math
 import keras
+import functools
 import numpy as np
 import tensorflow as tf
 import keras.layers as KL
@@ -74,13 +75,19 @@ def apply_mask(image, gray_image, mask):
     return image
 
 
-def apply_magic(image, gray_image, boxes, masks, ids, obj='person', count=1):
+def apply_magic(image, gray_image, boxes, masks, ids, objects_to_detect=None,
+                quantity=1):
+
+    if objects_to_detect is None:
+        objects_to_detect = CLASS_NAMES
+
+    if quantity < 1:
+        quantity = 1
 
     # n_instances saves the amount of all objects
     n_instances = boxes.shape[0]
 
-    objects = []
-    final_mask = None
+    detected_objects = []
 
     for i in range(n_instances):
         if not np.any(boxes[i]):
@@ -92,12 +99,22 @@ def apply_magic(image, gray_image, boxes, masks, ids, obj='person', count=1):
 
         label = CLASS_NAMES[ids[i]]
 
-        objects.append([label, square])
+        if label in objects_to_detect:
+            detected_objects.append([label, square, i])
 
-        if final_mask is not None:
-            final_mask |= masks[:, :, i]
-        else:
-            final_mask = masks[:, :, i]
+    if not detected_objects:
+        return True
+
+    # sort out objects by square and take needed quantity
+    sorted_objects = sorted(
+        detected_objects, key=lambda item: item[1], reverse=True
+    )[:quantity]
+
+    # get final mask by merging all objects' mask
+    final_mask = functools.reduce(
+        lambda x, y: x | y,
+        [masks[:, :, i[-1]] for i in sorted_objects],
+    )
 
     apply_mask(image, gray_image, final_mask)
 
